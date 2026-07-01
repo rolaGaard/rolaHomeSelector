@@ -113,6 +113,7 @@ module.exports = async function handler(req, res) {
       ? [jinaText.substring(0, 10000), pageTitle, ogTitle, ogDesc].join(' | ')
       : [pageTitle, ogTitle, ogDesc, scriptText, bodyText].join(' | ');
     let price = findPrice(allText);
+    if (price) price = price.replace(/^(?:venta|alquiler|compra)\s+/i,'').trim(); // remove prefix
 
     // Extract surface area
     let surface = null;
@@ -124,26 +125,41 @@ module.exports = async function handler(req, res) {
       if (num && parseInt(num) > 15 && parseInt(num) < 5000) surface = num + ' m²';
     }
 
-    // 5. Extract address from og tags / URL slug
+    // 5. Extract address from og tags / Jina text / URL slug
     let address = null;
-    const titleClean = (ogTitle || pageTitle || '').split(/[-|]/)[0].trim();
-    if (titleClean.length > 4 && titleClean.length < 100) address = titleClean;
 
-    // Try street address pattern from og:description or Jina text
-    const addrSource = ogDesc || (jinaText ? jinaText.substring(0, 2000) : '');
+    // From og:title - skip if it starts with price/venta keywords
+    const rawTitle = (ogTitle || pageTitle || '');
+    // ZonaProp titles: "Venta USD 740.000 - Departamento - Montevideo al 1500, Recoleta"
+    // Try each segment split by - or |
+    for (const seg of rawTitle.split(/[-|]/).map(s => s.trim())) {
+      if (seg.length > 4 && seg.length < 100 && !/^(?:venta|alquiler|compra|arrendar|USD|U\$S|\$|\d)/i.test(seg)) {
+        address = seg; break;
+      }
+    }
+
+    // Try Jina text for street address (richest source)
+    const addrSource = (jinaText ? jinaText.substring(0, 3000) : '') || ogDesc || '';
     if (!address && addrSource) {
-      const m1 = addrSource.match(/([A-Z][a-z]+(?: [A-Za-z.]+)* (?:al )?\d{3,5}(?:, [A-Z][a-z]+)?)/);
-      const m2 = addrSource.match(/([A-Z][a-z]+ y [A-Z][a-z]+(?:, [A-Z][a-z]+)?)/);
+      const m1 = addrSource.match(/([A-Z][a-záéíóúñü.]+(?: [A-Za-záéíóúñü.]+){0,4} (?:al |N[°º]\s*)?\d{3,5}(?:[, ]+[A-Z][a-záéíóúñü]+)?)/u);
+      const m2 = addrSource.match(/([A-Z][a-záéíóúñü]+ y [A-Z][a-záéíóúñü]+(?:[, ]+[A-Z][a-záéíóúñü]+)?)/u);
       if (m1) address = m1[1].trim();
       else if (m2) address = m2[1].trim();
     }
 
-    // Neighborhood from URL slug as fallback
+    // Try image URL from Jina markdown (images often listed as ![alt](url))
+    if (!image && jinaText) {
+      const jinaImg = jinaText.match(/!\[.*?\]\((https?:\/\/[^)]+\.(?:jpg|jpeg|webp|png)[^)]*)\)/i)?.[1]
+                   || jinaText.match(/(https?:\/\/[^\s"'<>]+\.(?:jpg|jpeg|webp|png)[^\s"'<>]*)/i)?.[1];
+      if (jinaImg && !jinaImg.includes('logo') && !jinaImg.includes('icon')) image = jinaImg;
+    }
+
+    // Neighborhood from URL slug as final fallback
     if (!address) {
       const slug = decodeURIComponent(urlToFetch).toLowerCase();
       const hoods = ['recoleta','palermo','belgrano','caballito','flores','almagro','villa-crespo','san-telmo','puerto-madero','retiro','barrio-norte','nunez','colegiales','villa-urquiza','montserrat'];
       for (const h of hoods) {
-        if (slug.includes(h)) { address = h.replace(/-/g,' ').replace(/\w/g,c=>c.toUpperCase()); break; }
+        if (slug.includes(h)) { address = h.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase()); break; }
       }
     }
 
