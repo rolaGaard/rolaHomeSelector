@@ -108,17 +108,41 @@ module.exports = async function handler(req, res) {
       if (num && parseInt(num) > 15 && parseInt(num) < 5000) surface = num + ' m²';
     }
 
-    // 5. Extract address from og:title / URL slug
+    // 5. Extract address from og tags / URL slug
     let address = null;
-    const titleClean = (ogTitle || pageTitle).replace(/[-|–]\s*.{0,30}$/, '').trim();
-    if (titleClean.length > 4 && titleClean.length < 80) address = titleClean;
+    const titleClean = (ogTitle || pageTitle || '').split(/[-|]/)[0].trim();
+    if (titleClean.length > 4 && titleClean.length < 100) address = titleClean;
+
+    // Try street address pattern from og:description
+    if (!address && ogDesc) {
+      const m1 = ogDesc.match(/([A-Z][a-z]+(?: [A-Za-z.]+)* (?:al )?\d{3,5}(?:, [A-Z][a-z]+)?)/);
+      const m2 = ogDesc.match(/([A-Z][a-z]+ y [A-Z][a-z]+(?:, [A-Z][a-z]+)?)/);
+      if (m1) address = m1[1].trim();
+      else if (m2) address = m2[1].trim();
+    }
+
+    // Neighborhood from URL slug as fallback
+    if (!address) {
+      const slug = decodeURIComponent(urlToFetch).toLowerCase();
+      const hoods = ['recoleta','palermo','belgrano','caballito','flores','almagro','villa-crespo','san-telmo','puerto-madero','retiro','barrio-norte','nunez','colegiales','villa-urquiza','montserrat'];
+      for (const h of hoods) {
+        if (slug.includes(h)) { address = h.replace(/-/g,' ').replace(/\w/g,c=>c.toUpperCase()); break; }
+      }
+    }
+
     const agency = agencyFromDomain(domain);
 
     // 6. ── SCREENSHOT + CLAUDE VISION (if price still missing) ──────────────
     if (!price) {
       const visionPrompt = `Esta es una captura de pantalla de una página de inmobiliaria argentina (${domain}).
-Extraé los datos visibles y respondé SOLO con JSON válido, sin texto adicional:
-{"price":"precio como USD 430.000 o $ 85.000.000 o null","address":"dirección completa: si es intersección poné ej. Av Las Heras y Ayacucho, Recoleta; si es altura poné ej. Juncal al 2100, Recoleta; siempre incluí el barrio","surface":"superficie total como 163 m² o null","agency":"nombre de inmobiliaria o null"}`;
+Buscá MUY CUIDADOSAMENTE en TODA la imagen: títulos, subtítulos, encabezados, textos pequeños, breadcrumbs, fichas técnicas.
+Respondé SOLO con JSON válido, sin texto adicional:
+{
+  "price": "precio de venta, ej: USD 430.000 o $ 85.000.000 o null",
+  "address": "dirección de la propiedad - buscala en el título principal, encabezado o ficha. Formato: calle al número, barrio (ej: Arenales al 1234, Recoleta) o intersección (ej: Av Las Heras y Ayacucho, Recoleta). Si solo ves el barrio, poné solo el barrio. null si no encontrás nada.",
+  "surface": "superficie total en m², ej: 90 m² o null",
+  "agency": "nombre de la inmobiliaria visible en logo o texto, o null"
+}`;
 
       async function tryVision(imgBase64, contentType) {
         const visionData = await callClaude({
@@ -143,7 +167,7 @@ Extraé los datos visibles y respondé SOLO con JSON válido, sin texto adiciona
       // Service 1: thum.io (no API key)
       let visionDone = false;
       try {
-        const r = await fetch(`https://image.thum.io/get/width/1280/crop/900/noanimate/${encodeURIComponent(urlToFetch)}`);
+        const r = await fetch(`https://image.thum.io/get/width/1280/crop/1400/noanimate/${encodeURIComponent(urlToFetch)}`);
         if (r.ok && r.headers.get('content-type')?.startsWith('image')) {
           const buf = await r.arrayBuffer();
           if (buf.byteLength > 5000) { // real image, not error page
