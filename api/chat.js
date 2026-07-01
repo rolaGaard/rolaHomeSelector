@@ -99,6 +99,25 @@ module.exports = async function handler(req, res) {
       }
     }
 
+    // Extract price directly from meta tags with regex (before Claude)
+    const allText = [ogTitle, ogDesc, ogSite].join(' ');
+    let directPrice = null;
+    const pricePatterns = [
+      /U(?:\$|SD|ss?)\s*S?\s*([\d.,]+(?:\.\d{3})*)/i,
+      /([\d]{2,3}(?:[.,]\d{3})+)\s*(?:USD|U\$S|dolares|dólares)/i,
+      /\$\s*([\d]{2,3}(?:[.,]\d{3})+)/,
+    ];
+    for (const pat of pricePatterns) {
+      const m = allText.match(pat);
+      if (m) {
+        const raw = m[0].trim();
+        // Determine if USD
+        const isUSD = /U\$|USD|u\$s|dolares|dólares/i.test(raw + allText.substring(0, 50));
+        directPrice = isUSD ? raw.replace(/^.*?(USD|U\$S?)\s*/i, 'USD ').trim() : raw;
+        break;
+      }
+    }
+
     // Build page info for Claude
     const domain = new URL(urlToFetch).hostname.replace('www.','');
     const pageInfo = [
@@ -108,17 +127,22 @@ module.exports = async function handler(req, res) {
       `og:title: ${ogTitle || '(no encontrado)'}`,
       `og:description: ${ogDesc || '(no encontrado)'}`,
       `og:site_name: ${ogSite || '(no encontrado)'}`,
+      directPrice ? `precio detectado: ${directPrice}` : '',
       fetchError ? `nota: no se pudo acceder a la pagina (${fetchError})` : '',
     ].filter(Boolean).join('\n');
 
     // Claude extracts structured data
     const extractSystem = `Sos un extractor de datos inmobiliarios argentinos experto.
 Respondé SOLO con JSON válido, sin backticks, sin texto adicional.
-Formato exacto (sin campos extra):
-{"image_url":"URL de foto o null","price":"precio como USD 280.000 o $ 85.000.000 o null","agency":"inmobiliaria o null","address":"dirección corta como Juncal al 2100, Recoleta o null"}
-Si el og:title o og:description tiene una dirección, extractala.
-Si el dominio es mirandabosch.com la agencia es Miranda Bosch.
-Si no hay precio disponible pon null. No inventes precios.`;
+Formato exacto:
+{"image_url":"URL de foto o null","price":"precio como USD 280.000 o $ 85.000.000 o null","agency":"inmobiliaria o null","address":"dirección corta como Av. Santa Fe y Azcuénaga, Recoleta o null"}
+REGLAS IMPORTANTES:
+- Si hay un campo "precio detectado" en el input, USALO como price (no lo ignores).
+- Si og:title contiene USD o $ seguido de números, ese es el precio.
+- Si og:description menciona precio, usalo.
+- Si el dominio es mirandabosch.com la agencia es Miranda Bosch.
+- Para la address: extraela del og:title, og:description, o del slug de la URL.
+- Solo pon null si realmente no hay ningún dato disponible.`;
 
     let extracted = { image_url: deepImage || null, price: null, agency: urlClues.agency, address: urlClues.address };
 
@@ -145,13 +169,15 @@ Si no hay precio disponible pon null. No inventes precios.`;
       if (parsed) {
         extracted = {
           image_url: parsed.image_url || deepImage || null,
-          price:     parsed.price   || null,
+          price:     parsed.price   || directPrice || null,
           agency:    parsed.agency  || urlClues.agency,
-          address:   parsed.address || urlClues.address || ogTitle || null,
+          address:   parsed.address || urlClues.address || (ogTitle ? ogTitle.split('|')[0].trim() : null),
         };
       }
     } catch(e) {
       // Claude failed - use what we have from meta tags + URL
+      extracted.price = directPrice || null;
+      extracted.address = urlClues.address || (ogTitle ? ogTitle.split('|')[0].trim() : null);
     }
 
     return res.status(200).json({ extracted });
