@@ -9,20 +9,19 @@ module.exports = async function handler(req, res) {
 
   let finalMessages = messages;
 
-  // If a property URL was provided, fetch the page server-side and pass HTML to Claude
   if (urlToFetch) {
-    let pageContext = '';
+    let pageContext = `URL: ${urlToFetch}\n`;
     try {
       const pageRes = await fetch(urlToFetch, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept': 'text/html,application/xhtml+xml',
           'Accept-Language': 'es-AR,es;q=0.9'
-        }
+        },
+        signal: AbortSignal.timeout(8000)
       });
       const html = await pageRes.text();
 
-      // Extract og meta tags
       const ogImage   = (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
                          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
                          html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i))?.[1] || '';
@@ -31,30 +30,19 @@ module.exports = async function handler(req, res) {
       const ogDesc    = (html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i) ||
                          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i))?.[1] || '';
       const pageTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '';
-
-      // Strip scripts/styles and take first 4000 chars of body text
-      const bodyText = html
+      const bodyText  = html
         .replace(/<script[\s\S]*?<\/script>/gi, '')
         .replace(/<style[\s\S]*?<\/style>/gi, '')
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
-        .substring(0, 4000);
+        .substring(0, 3000);
 
-      pageContext = `URL: ${urlToFetch}
-og:image: ${ogImage}
-og:title: ${ogTitle}
-og:description: ${ogDesc}
-page title: ${pageTitle}
-body text (primeros 4000 chars): ${bodyText}`;
-
+      pageContext += `og:image: ${ogImage}\nog:title: ${ogTitle}\nog:description: ${ogDesc}\npage title: ${pageTitle}\nbody: ${bodyText}`;
     } catch (e) {
-      pageContext = `URL: ${urlToFetch}\nError al acceder a la página: ${e.message}`;
+      pageContext += `Error al acceder: ${e.message}`;
     }
 
-    finalMessages = [{
-      role: 'user',
-      content: `Extraé los datos de esta propiedad inmobiliaria.\n\n${pageContext}`
-    }];
+    finalMessages = [{ role: 'user', content: `Extraé los datos de esta propiedad:\n\n${pageContext}` }];
   }
 
   try {
@@ -74,8 +62,19 @@ body text (primeros 4000 chars): ${bodyText}`;
     });
 
     const data = await response.json();
-    return res.status(response.ok ? 200 : response.status).json(data);
+
+    // Log error details so they appear in Vercel logs
+    if (!response.ok) {
+      console.error('Anthropic error:', response.status, JSON.stringify(data));
+      // Return the full error to the client so we can debug
+      return res.status(200).json({
+        content: [{ type: 'text', text: `DEBUG ERROR ${response.status}: ${JSON.stringify(data)}` }]
+      });
+    }
+
+    return res.status(200).json(data);
   } catch (e) {
+    console.error('Function error:', e.message);
     return res.status(500).json({ error: e.message });
   }
 };
