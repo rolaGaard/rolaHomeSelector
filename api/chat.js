@@ -6,6 +6,8 @@ module.exports = async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { messages, system, urlToFetch, mode } = req.body;
+  // Sanitize API key in case it was saved multiple times in Vercel
+  const ANTHROPIC_KEY = (ANTHROPIC_KEY || '').trim().split(/\s+/)[0];
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
   function getMeta(html, patterns) {
@@ -38,7 +40,7 @@ module.exports = async function handler(req, res) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'x-api-key': ANTHROPIC_KEY,
         'anthropic-version': '2023-06-01',
         ...extraHeaders
       },
