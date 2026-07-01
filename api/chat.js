@@ -59,16 +59,21 @@ module.exports = async function handler(req, res) {
     const domain = new URL(urlToFetch).hostname.replace('www.','');
     let html = '';
 
-    // 1. Fetch the page
-    try {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 9000);
-      const pr = await fetch(urlToFetch, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
-        signal: ctrl.signal
-      });
-      html = await pr.text();
-    } catch(e) { /* site blocked or timeout */ }
+    // 1. Fetch the page (try real browser UA first, then Googlebot)
+    const fetchHeaders = [
+      { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'es-AR,es;q=0.9' },
+      { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
+    ];
+    for (const headers of fetchHeaders) {
+      if (html) break;
+      try {
+        const ctrl = new AbortController();
+        setTimeout(() => ctrl.abort(), 8000);
+        const pr = await fetch(urlToFetch, { headers, signal: ctrl.signal });
+        const text = await pr.text();
+        if (text.length > 500) html = text;
+      } catch(e) {}
+    }
 
     // 2. Extract meta tags + basic info
     const ogImage  = getMeta(html, [/property=["']og:image["'][^>]+content=["']([^"']{15,})["']/i, /content=["']([^"']{15,})["'][^>]+property=["']og:image["']/i, /name=["']twitter:image["'][^>]+content=["']([^"']{15,})["']/i]);
@@ -111,38 +116,57 @@ module.exports = async function handler(req, res) {
 
     // 6. ── SCREENSHOT + CLAUDE VISION (if price still missing) ──────────────
     if (!price) {
-      try {
-        // thum.io: free screenshot service, no API key needed
-        const thumbUrl = `https://image.thum.io/get/width/1280/crop/900/noanimate/${encodeURIComponent(urlToFetch)}`;
-        const imgRes = await fetch(thumbUrl, { signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined });
-        if (imgRes.ok) {
-          const imgBuffer = await imgRes.arrayBuffer();
-          const imgBase64 = Buffer.from(imgBuffer).toString('base64');
-          const contentType = imgRes.headers.get('content-type') || 'image/jpeg';
-
-          const visionData = await callClaude({
-            model: 'claude-sonnet-4-6',
-            max_tokens: 300,
-            messages: [{
-              role: 'user',
-              content: [
-                { type: 'image', source: { type: 'base64', media_type: contentType, data: imgBase64 } },
-                { type: 'text', text: `Esta es una captura de pantalla de una página de inmobiliaria argentina (${domain}).
+      const visionPrompt = `Esta es una captura de pantalla de una página de inmobiliaria argentina (${domain}).
 Extraé los datos visibles y respondé SOLO con JSON válido, sin texto adicional:
-{"price":"precio como USD 430.000 o $ 85.000.000 o null","address":"dirección completa: si es intersección poné ej. Av Las Heras y Ayacucho, Recoleta; si es altura poné ej. Juncal al 2100, Recoleta; siempre incluí el barrio","surface":"superficie total como 163 m² o null","agency":"nombre de inmobiliaria o null"}` }
-              ]
-            }]
-          });
+{"price":"precio como USD 430.000 o $ 85.000.000 o null","address":"dirección completa: si es intersección poné ej. Av Las Heras y Ayacucho, Recoleta; si es altura poné ej. Juncal al 2100, Recoleta; siempre incluí el barrio","surface":"superficie total como 163 m² o null","agency":"nombre de inmobiliaria o null"}`;
 
-          const visionText = (visionData.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
-          const visionParsed = parseJSON(visionText);
-          if (visionParsed) {
-            price   = visionParsed.price   || price;
-            address = visionParsed.address || address;
-            surface = visionParsed.surface || surface;
+      async function tryVision(imgBase64, contentType) {
+        const visionData = await callClaude({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 300,
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: contentType || 'image/jpeg', data: imgBase64 } },
+            { type: 'text', text: visionPrompt }
+          ]}]
+        });
+        const txt = (visionData.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+        const parsed = parseJSON(txt);
+        if (parsed) {
+          price   = parsed.price   || price;
+          address = parsed.address || address;
+          surface = parsed.surface || surface;
+          return true;
+        }
+        return false;
+      }
+
+      // Service 1: thum.io (no API key)
+      let visionDone = false;
+      try {
+        const r = await fetch(`https://image.thum.io/get/width/1280/crop/900/noanimate/${encodeURIComponent(urlToFetch)}`);
+        if (r.ok && r.headers.get('content-type')?.startsWith('image')) {
+          const buf = await r.arrayBuffer();
+          if (buf.byteLength > 5000) { // real image, not error page
+            visionDone = await tryVision(Buffer.from(buf).toString('base64'), r.headers.get('content-type'));
           }
         }
-      } catch(e) { /* screenshot failed, use what we have */ }
+      } catch(e) {}
+
+      // Service 2: microlink.io (free, 100/day, gets screenshot URL then fetches it)
+      if (!visionDone) {
+        try {
+          const mlRes = await fetch(`https://api.microlink.io/?url=${encodeURIComponent(urlToFetch)}&screenshot=true&meta=false&embed=screenshot.url`);
+          const mlData = await mlRes.json();
+          const screenshotUrl = mlData?.data?.screenshot?.url;
+          if (screenshotUrl) {
+            const imgRes = await fetch(screenshotUrl);
+            if (imgRes.ok) {
+              const buf = await imgRes.arrayBuffer();
+              visionDone = await tryVision(Buffer.from(buf).toString('base64'), imgRes.headers.get('content-type') || 'image/jpeg');
+            }
+          }
+        } catch(e) {}
+      }
     }
 
     return res.status(200).json({
