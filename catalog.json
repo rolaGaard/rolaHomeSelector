@@ -1,6 +1,16 @@
 {
   "properties": [
     {
+      "id": "1782888277901",
+      "url": "#",
+      "image": "__local__1782888277901",
+      "price": "USD 215.000",
+      "agency": "Inmobiliaria",
+      "address": "Ver propiedad",
+      "surface": "98 m²",
+      "added_at": "1/7/2026"
+    },
+    {
       "id": "1782888270167",
       "url": "https://www.zonaprop.com.ar/propiedades/clasificado/veclapin-departamnto-4-ambientes-a-reciclar-con-balcon-58988753.html?n_src=Listado&n_pg=1&n_pos=2&n_search_id=27ee381e-216f-48c8-a1c6-2c821ea005ef",
       "image": null,
