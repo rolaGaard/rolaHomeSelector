@@ -59,19 +59,32 @@ module.exports = async function handler(req, res) {
     const domain = new URL(urlToFetch).hostname.replace('www.','');
     let html = '';
 
-    // 1. Fetch the page (try real browser UA first, then Googlebot)
-    const fetchHeaders = [
-      { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'es-AR,es;q=0.9' },
-      { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' },
-    ];
-    for (const headers of fetchHeaders) {
-      if (html) break;
+    // 1a. Direct HTML fetch (browser UA)
+    try {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 7000);
+      const pr = await fetch(urlToFetch, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36', 'Accept': 'text/html,application/xhtml+xml', 'Accept-Language': 'es-AR,es;q=0.9' },
+        signal: ctrl.signal
+      });
+      const t = await pr.text();
+      if (t.length > 1000 && !t.includes('Just a moment') && !t.includes('Checking your browser')) html = t;
+    } catch(e) {}
+
+    // 1b. Jina AI Reader — handles JS-rendered sites and Cloudflare (free, no API key)
+    let jinaText = '';
+    if (!html) {
       try {
         const ctrl = new AbortController();
-        setTimeout(() => ctrl.abort(), 8000);
-        const pr = await fetch(urlToFetch, { headers, signal: ctrl.signal });
-        const text = await pr.text();
-        if (text.length > 500) html = text;
+        setTimeout(() => ctrl.abort(), 12000);
+        const jr = await fetch(`https://r.jina.ai/${urlToFetch}`, {
+          headers: { 'Accept': 'text/plain', 'X-Return-Format': 'text', 'X-Timeout': '10' },
+          signal: ctrl.signal
+        });
+        if (jr.ok) {
+          const jt = await jr.text();
+          if (jt.length > 200) jinaText = jt;
+        }
       } catch(e) {}
     }
 
@@ -95,7 +108,10 @@ module.exports = async function handler(req, res) {
     // 4. Try to find price in text sources
     const scriptText = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>m[1]).join(' ').substring(0,6000);
     const bodyText = html.replace(/<script[\s\S]*?<\/script>/gi,'').replace(/<style[\s\S]*?<\/style>/gi,'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').substring(0,8000);
-    const allText = [pageTitle, ogTitle, ogDesc, scriptText, bodyText].join(' | ');
+    // If Jina succeeded, use it as the primary text source (much richer)
+    const allText = jinaText
+      ? [jinaText.substring(0, 10000), pageTitle, ogTitle, ogDesc].join(' | ')
+      : [pageTitle, ogTitle, ogDesc, scriptText, bodyText].join(' | ');
     let price = findPrice(allText);
 
     // Extract surface area
@@ -113,10 +129,11 @@ module.exports = async function handler(req, res) {
     const titleClean = (ogTitle || pageTitle || '').split(/[-|]/)[0].trim();
     if (titleClean.length > 4 && titleClean.length < 100) address = titleClean;
 
-    // Try street address pattern from og:description
-    if (!address && ogDesc) {
-      const m1 = ogDesc.match(/([A-Z][a-z]+(?: [A-Za-z.]+)* (?:al )?\d{3,5}(?:, [A-Z][a-z]+)?)/);
-      const m2 = ogDesc.match(/([A-Z][a-z]+ y [A-Z][a-z]+(?:, [A-Z][a-z]+)?)/);
+    // Try street address pattern from og:description or Jina text
+    const addrSource = ogDesc || (jinaText ? jinaText.substring(0, 2000) : '');
+    if (!address && addrSource) {
+      const m1 = addrSource.match(/([A-Z][a-z]+(?: [A-Za-z.]+)* (?:al )?\d{3,5}(?:, [A-Z][a-z]+)?)/);
+      const m2 = addrSource.match(/([A-Z][a-z]+ y [A-Z][a-z]+(?:, [A-Z][a-z]+)?)/);
       if (m1) address = m1[1].trim();
       else if (m2) address = m2[1].trim();
     }
@@ -133,7 +150,7 @@ module.exports = async function handler(req, res) {
     const agency = agencyFromDomain(domain);
 
     // 6. ── SCREENSHOT + CLAUDE VISION (if price still missing) ──────────────
-    if (!price) {
+    if (!price && !jinaText) { // Skip screenshot if Jina already gave us text
       const visionPrompt = `Esta es una captura de pantalla de una página de inmobiliaria argentina (${domain}).
 Buscá MUY CUIDADOSAMENTE en TODA la imagen: títulos, subtítulos, encabezados, textos pequeños, breadcrumbs, fichas técnicas.
 Respondé SOLO con JSON válido, sin texto adicional:
