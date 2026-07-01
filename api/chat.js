@@ -7,46 +7,46 @@ module.exports = async function handler(req, res) {
 
   const { messages, system, urlToFetch } = req.body;
 
-  let finalMessages = messages;
-
-  if (urlToFetch) {
-    let pageContext = `URL: ${urlToFetch}\n`;
-    try {
-      const pageRes = await fetch(urlToFetch, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'es-AR,es;q=0.9'
-        },
-        signal: AbortSignal.timeout(8000)
-      });
-      const html = await pageRes.text();
-
-      const ogImage   = (html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
-                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
-                         html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i))?.[1] || '';
-      const ogTitle   = (html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
-                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i))?.[1] || '';
-      const ogDesc    = (html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)["']/i) ||
-                         html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:description["']/i))?.[1] || '';
-      const pageTitle = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '';
-      const bodyText  = html
-        .replace(/<script[\s\S]*?<\/script>/gi, '')
-        .replace(/<style[\s\S]*?<\/style>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .substring(0, 3000);
-
-      pageContext += `og:image: ${ogImage}\nog:title: ${ogTitle}\nog:description: ${ogDesc}\npage title: ${pageTitle}\nbody: ${bodyText}`;
-    } catch (e) {
-      pageContext += `Error al acceder: ${e.message}`;
-    }
-
-    finalMessages = [{ role: 'user', content: `Extraé los datos de esta propiedad:\n\n${pageContext}` }];
+  // Check env var
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(200).json({
+      content: [{ type: 'text', text: '❌ DEBUG: ANTHROPIC_API_KEY no está configurada en Vercel' }]
+    });
   }
 
+  let finalMessages = messages || [];
+
+  // Server-side page fetch
+  if (urlToFetch) {
+    let pageInfo = `URL: ${urlToFetch}\n`;
+    try {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 9000);
+      const pageRes = await fetch(urlToFetch, {
+        headers: { 'User-Agent': 'Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36' },
+        signal: ctrl.signal
+      });
+      const html = await pageRes.text();
+      // Only extract og tags - small payload
+      const ogImage = html.match(/property=["']og:image["'][^>]+content=["']([^"']{10,}?)["']/i)?.[1] ||
+                      html.match(/content=["']([^"']{10,}?)["'][^>]+property=["']og:image["']/i)?.[1] || '';
+      const ogTitle = html.match(/property=["']og:title["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+                      html.match(/content=["']([^"']+)["'][^>]+property=["']og:title["']/i)?.[1] || '';
+      const ogDesc  = html.match(/property=["']og:description["'][^>]+content=["']([^"']+)["']/i)?.[1] ||
+                      html.match(/content=["']([^"']+)["'][^>]+property=["']og:description["']/i)?.[1] || '';
+      const ogSite  = html.match(/property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i)?.[1] || '';
+      const domain  = new URL(urlToFetch).hostname.replace('www.','');
+      pageInfo += `dominio: ${domain}\nog:image: ${ogImage}\nog:title: ${ogTitle}\nog:description: ${ogDesc}\nog:site_name: ${ogSite}`;
+    } catch(e) {
+      pageInfo += `Error al fetchear: ${e.message}`;
+    }
+    finalMessages = [{ role: 'user', content: pageInfo }];
+  }
+
+  // Call Anthropic
+  let anthropicRes, responseText;
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -54,27 +54,31 @@ module.exports = async function handler(req, res) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1024,
-        system,
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 512,
+        system: system || '',
         messages: finalMessages
       })
     });
+    responseText = await anthropicRes.text();
+  } catch(e) {
+    return res.status(200).json({
+      content: [{ type: 'text', text: `❌ DEBUG fetch error: ${e.message}` }]
+    });
+  }
 
-    const data = await response.json();
+  if (!anthropicRes.ok) {
+    // Return error as readable message instead of 500
+    return res.status(200).json({
+      content: [{ type: 'text', text: `❌ DEBUG Anthropic ${anthropicRes.status}: ${responseText}` }]
+    });
+  }
 
-    // Log error details so they appear in Vercel logs
-    if (!response.ok) {
-      console.error('Anthropic error:', response.status, JSON.stringify(data));
-      // Return the full error to the client so we can debug
-      return res.status(200).json({
-        content: [{ type: 'text', text: `DEBUG ERROR ${response.status}: ${JSON.stringify(data)}` }]
-      });
-    }
-
-    return res.status(200).json(data);
-  } catch (e) {
-    console.error('Function error:', e.message);
-    return res.status(500).json({ error: e.message });
+  try {
+    return res.status(200).json(JSON.parse(responseText));
+  } catch(e) {
+    return res.status(200).json({
+      content: [{ type: 'text', text: `❌ DEBUG parse error: ${responseText}` }]
+    });
   }
 };
