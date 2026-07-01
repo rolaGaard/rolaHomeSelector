@@ -57,6 +57,32 @@ module.exports = async function handler(req, res) {
     return null;
   }
 
+  // ── VISION MODE (photo uploaded by user) ─────────────────────────────────
+  if (mode === 'vision' && req.body.imageBase64) {
+    const { imageBase64, imageType, extraText } = req.body;
+    try {
+      const visionData = await callClaude({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 500,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: imageType || 'image/jpeg', data: imageBase64 } },
+            { type: 'text', text: `Esta es una foto de una propiedad inmobiliaria argentina.${extraText ? ' El usuario también escribió: "' + extraText + '".' : ''}
+Extraé TODA la información visible: precio, dirección, barrio, superficie, inmobiliaria, piso, ambientes, etc.
+Respondé SOLO con JSON válido:
+{"price":"precio como USD 430.000 o $ 85.000.000 o null","address":"dirección completa con barrio o null","surface":"superficie como 163 m² o null","agency":"inmobiliaria o null","url":null}` }
+          ]
+        }]
+      });
+      const txt = (visionData.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+      const extracted = parseJSON(txt) || {};
+      return res.status(200).json({ extracted });
+    } catch(e) {
+      return res.status(200).json({ extracted: {}, error: e.message });
+    }
+  }
+
   // ── EXTRACT MODE ──────────────────────────────────────────────────────────
   if (mode === 'extract' && urlToFetch) {
     const domain = new URL(urlToFetch).hostname.replace('www.','');
