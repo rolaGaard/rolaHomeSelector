@@ -605,6 +605,7 @@ Confirmación: Entendido — USD 215.000 en Palermo, 98 m².`
         if (parsed.price   && parsed.price   !== 'null') properties[idx].price   = parsed.price;
         if (parsed.address && parsed.address !== 'null') properties[idx].address = parsed.address;
         if (parsed.surface && parsed.surface !== 'null') properties[idx].surface = parsed.surface;
+        if (parsed.url     && parsed.url     !== 'null') properties[idx].url     = parsed.url;
         renderGrid();
         await saveCatalog(properties);
         addMsg('ai', `✅ ${confirmation || 'Propiedad actualizada.'}\n\n📍 ${properties[idx].address}\n💰 ${properties[idx].price}${properties[idx].surface ? '\n📐 '+properties[idx].surface : ''}\n\nSi falta algún dato más, seguí escribiendo o decí "listo".`);
@@ -678,7 +679,15 @@ function renderGrid() {
 function openProp(id, e) {
   if (e.target.closest('.card-del')) return;
   const p = properties.find(x=>x.id===id);
-  if (p) window.open(p.url,'_blank');
+  if (!p) return;
+  if (!p.url || p.url === '#') {
+    // No URL — ask user to add it
+    window._pendingPropId = id;
+    openChat();
+    addMsg('ai', '🔗 Esta propiedad no tiene link. Pegalo en el chat y lo asocio a la tarjeta.');
+    return;
+  }
+  window.open(p.url, '_blank');
 }
 
 async function delProp(id, e) {
