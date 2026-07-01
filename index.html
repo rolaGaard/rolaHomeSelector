@@ -367,7 +367,10 @@ async function handleSend() {
   const urlMatch = text.match(/https?:\/\/[^\s]+/);
   if (urlMatch) {
     await processLink(urlMatch[0]);
+  } else if (window._pendingPropId && text.toLowerCase() !== 'listo') {
+    await completePropManually(text);
   } else {
+    window._pendingPropId = null;
     await chatGeneral(text);
   }
 }
@@ -399,11 +402,23 @@ async function processLink(url) {
     properties.unshift(prop);
     renderGrid();
 
-    addMsg('ai',
-      `✅ ¡Propiedad agregada!\n\n` +
-      `📍 ${prop.address}\n💰 ${prop.price}\n🏢 ${prop.agency}` +
-      (!p.image_url ? '\n\n⚠️ Sin foto encontrada.' : '')
-    );
+    const missing = [];
+    if (!p.price)     missing.push('precio');
+    if (!p.address || prop.address === 'Ver propiedad →') missing.push('dirección');
+    if (!p.image_url) missing.push('foto');
+
+    if (missing.length === 0) {
+      addMsg('ai', `✅ ¡Propiedad agregada!\n\n📍 ${prop.address}\n💰 ${prop.price}\n🏢 ${prop.agency}${prop.surface ? '\n📐 ' + prop.surface : ''}`);
+    } else {
+      // Store pending property id for manual completion
+      window._pendingPropId = prop.id;
+      addMsg('ai',
+        `✅ Propiedad agregada (parcialmente).\n\nNo pude extraer automáticamente: ${missing.join(', ')}.\n\n` +
+        `¿Me los pasás vos? Escribilos en el chat, por ejemplo:\n` +
+        `_"USD 740.000, Montevideo al 1500 Recoleta, 208m2"_\n\n` +
+        `O si no tenés el dato escribí "listo" para dejarlo así.`
+      );
+    }
 
     try {
       await saveCatalog(properties);
@@ -413,6 +428,43 @@ async function processLink(url) {
       toast('Error al guardar', 'error');
     }
 
+  } catch(e) {
+    removeMsg(tid);
+    addMsg('ai', `❌ ${e.message}`);
+  } finally {
+    busy = false; setBusy(false);
+  }
+}
+
+async function completePropManually(text) {
+  if (text.toLowerCase() === 'listo') { window._pendingPropId = null; return; }
+  const tid = addTyping('Actualizando propiedad…');
+  busy = true; setBusy(true);
+  try {
+    const data = await apiChat(
+      [{ role: 'user', content: `El usuario escribió esto sobre una propiedad: "${text}". Extraé precio, dirección y superficie y respondé SOLO con JSON: {"price":"ej USD 740.000 o null","address":"ej Montevideo al 1500, Recoleta o null","surface":"ej 208 m² o null"}` }],
+      'Sos un extractor de datos inmobiliarios. Respondé solo JSON válido.'
+    );
+    removeMsg(tid);
+    const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+    let parsed = null;
+    try { parsed = JSON.parse(reply.replace(/```json?/g,'').replace(/```/g,'').trim()); } catch {}
+    if (!parsed) { const m = reply.match(/\{[\s\S]*?\}/); if (m) try { parsed = JSON.parse(m[0]); } catch {} }
+
+    if (parsed) {
+      const idx = properties.findIndex(p => p.id === window._pendingPropId);
+      if (idx !== -1) {
+        if (parsed.price && parsed.price !== 'null')     properties[idx].price   = parsed.price;
+        if (parsed.address && parsed.address !== 'null') properties[idx].address = parsed.address;
+        if (parsed.surface && parsed.surface !== 'null') properties[idx].surface = parsed.surface;
+        renderGrid();
+        await saveCatalog(properties);
+        addMsg('ai', `✅ ¡Listo! Propiedad actualizada:\n📍 ${properties[idx].address}\n💰 ${properties[idx].price}${properties[idx].surface ? '\n📐 '+properties[idx].surface : ''}`);
+        window._pendingPropId = null;
+      }
+    } else {
+      addMsg('ai', 'No entendí bien los datos. Intentá con formato: "USD 740.000, Montevideo al 1500 Recoleta, 208m2"');
+    }
   } catch(e) {
     removeMsg(tid);
     addMsg('ai', `❌ ${e.message}`);
