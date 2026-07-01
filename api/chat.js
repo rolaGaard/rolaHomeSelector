@@ -150,16 +150,11 @@ module.exports = async function handler(req, res) {
     const agency = agencyFromDomain(domain);
 
     // 6. ── SCREENSHOT + CLAUDE VISION (if price still missing) ──────────────
-    if (!price && !jinaText) { // Skip screenshot if Jina already gave us text
+    if (!image || !price) { // Try screenshot if image missing OR price missing
       const visionPrompt = `Esta es una captura de pantalla de una página de inmobiliaria argentina (${domain}).
 Buscá MUY CUIDADOSAMENTE en TODA la imagen: títulos, subtítulos, encabezados, textos pequeños, breadcrumbs, fichas técnicas.
 Respondé SOLO con JSON válido, sin texto adicional:
-{
-  "price": "precio de venta, ej: USD 430.000 o $ 85.000.000 o null",
-  "address": "dirección de la propiedad - buscala en el título principal, encabezado o ficha. Formato: calle al número, barrio (ej: Arenales al 1234, Recoleta) o intersección (ej: Av Las Heras y Ayacucho, Recoleta). Si solo ves el barrio, poné solo el barrio. null si no encontrás nada.",
-  "surface": "superficie total en m², ej: 90 m² o null",
-  "agency": "nombre de la inmobiliaria visible en logo o texto, o null"
-}`;
+{"price":"precio de venta ej USD 430.000 o null","address":"dirección ej Arenales al 1234 Recoleta o intersección o barrio o null","surface":"superficie ej 90 m2 o null","agency":"inmobiliaria o null","image_url":"si ves una URL de imagen de la propiedad pondría aqui o null"}`;
 
       async function tryVision(imgBase64, contentType) {
         const visionData = await callClaude({
@@ -176,6 +171,7 @@ Respondé SOLO con JSON válido, sin texto adicional:
           price   = parsed.price   || price;
           address = parsed.address || address;
           surface = parsed.surface || surface;
+          if (!image && parsed.image_url && !['null','undefined',''].includes(parsed.image_url)) image = parsed.image_url;
           return true;
         }
         return false;
