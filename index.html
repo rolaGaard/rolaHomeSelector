@@ -384,7 +384,9 @@ async function processLink(url) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: 'extract', urlToFetch: url })
     });
-    const data = await res.json();
+    const rawText = await res.text();
+    let data;
+    try { data = JSON.parse(rawText); } catch { throw new Error('Error del servidor: ' + rawText.substring(0,100)); }
     removeMsg(tid);
 
     const p = data.extracted || {};
