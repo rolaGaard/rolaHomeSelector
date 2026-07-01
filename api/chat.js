@@ -33,13 +33,14 @@ module.exports = async function handler(req, res) {
     return /USD|U\$S/i.test(raw) ? 'USD ' + raw.replace(/^(?:USD|U\$S)\s*/i,'').trim() : raw;
   }
 
-  async function callClaude(body) {
+  async function callClaude(body, extraHeaders = {}) {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        ...extraHeaders
       },
       body: JSON.stringify(body)
     });
@@ -220,6 +221,33 @@ Respondé SOLO con JSON válido, sin texto adicional:
           }
         } catch(e) {}
       }
+    }
+
+    // ── WEB SEARCH FALLBACK (if key data still missing) ──────────────────────
+    if (!price || !address || !image) {
+      try {
+        const searchData = await callClaude({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 600,
+          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+          messages: [{
+            role: 'user',
+            content: `Buscá información sobre esta propiedad inmobiliaria: ${urlToFetch}
+Necesito extraer estos datos que aún faltan: ${!price?'precio,':''} ${!address?'dirección,':''} ${!image?'URL de foto principal,':''}.
+Respondé SOLO con JSON: {"price":${price?`"${price}"`:"null"},"address":${address?`"${address}"`:"null"},"image_url":${image?`"${image}"`:"null"},"surface":${surface?`"${surface}"`:"null"}}`
+          }]
+        }, { 'anthropic-beta': 'web-search-2025-03-05' });
+
+        // Extract text from response (may include tool_use blocks)
+        const searchText = (searchData.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+        const searchParsed = parseJSON(searchText);
+        if (searchParsed) {
+          if (!price && searchParsed.price && searchParsed.price !== 'null') price = searchParsed.price;
+          if (!address && searchParsed.address && searchParsed.address !== 'null') address = searchParsed.address;
+          if (!image && searchParsed.image_url && searchParsed.image_url !== 'null') image = searchParsed.image_url;
+          if (!surface && searchParsed.surface && searchParsed.surface !== 'null') surface = searchParsed.surface;
+        }
+      } catch(e) { /* web search not available or failed */ }
     }
 
     return res.status(200).json({
