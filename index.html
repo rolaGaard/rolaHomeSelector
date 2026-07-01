@@ -437,33 +437,53 @@ async function processLink(url) {
 }
 
 async function completePropManually(text) {
-  if (text.toLowerCase() === 'listo') { window._pendingPropId = null; return; }
-  const tid = addTyping('Actualizando propiedad…');
+  if (text.toLowerCase() === 'listo') {
+    window._pendingPropId = null;
+    addMsg('ai', '👍 Ok, la propiedad queda guardada como está. Podés editarla después.');
+    return;
+  }
+  const tid = addTyping('Entendiendo los datos…');
   busy = true; setBusy(true);
   try {
+    const prop = properties.find(p => p.id === window._pendingPropId);
     const data = await apiChat(
-      [{ role: 'user', content: `El usuario escribió esto sobre una propiedad: "${text}". Extraé precio, dirección y superficie y respondé SOLO con JSON: {"price":"ej USD 740.000 o null","address":"ej Montevideo al 1500, Recoleta o null","surface":"ej 208 m² o null"}` }],
-      'Sos un extractor de datos inmobiliarios. Respondé solo JSON válido.'
+      [{ role: 'user', content: text }],
+      `Sos un asistente inmobiliario. El usuario te está dando datos para completar una propiedad que tiene cargada.
+Propiedad actual: precio="${prop?.price||'?'}", dirección="${prop?.address||'?'}", superficie="${prop?.surface||'?'}".
+El usuario puede escribir en cualquier formato. Tu trabajo es entender qué está diciendo y extraer los campos.
+Respondé con un JSON y luego una confirmación amigable. Formato de respuesta:
+{"price":"valor o null","address":"valor o null","surface":"valor o null"}
+Confirmación: [una línea confirmando lo que entendiste]
+
+Ejemplo: si dice "vale 215 lucas, está en Palermo, 98 metros" respondés:
+{"price":"USD 215.000","address":"Palermo","surface":"98 m²"}
+Confirmación: Entendido — USD 215.000 en Palermo, 98 m².`
     );
     removeMsg(tid);
-    const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
+
+    const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('').trim();
+
+    // Extract JSON (might be at start or anywhere in reply)
     let parsed = null;
-    try { parsed = JSON.parse(reply.replace(/```json?/g,'').replace(/```/g,'').trim()); } catch {}
-    if (!parsed) { const m = reply.match(/\{[\s\S]*?\}/); if (m) try { parsed = JSON.parse(m[0]); } catch {} }
+    const jsonMatch = reply.match(/\{[\s\S]*?\}/);
+    if (jsonMatch) try { parsed = JSON.parse(jsonMatch[0]); } catch {}
+
+    // Extract human confirmation (text after JSON)
+    const confirmation = reply.replace(/\{[\s\S]*?\}/, '').replace(/Confirmación:/i,'').trim();
 
     if (parsed) {
       const idx = properties.findIndex(p => p.id === window._pendingPropId);
       if (idx !== -1) {
-        if (parsed.price && parsed.price !== 'null')     properties[idx].price   = parsed.price;
+        if (parsed.price   && parsed.price   !== 'null') properties[idx].price   = parsed.price;
         if (parsed.address && parsed.address !== 'null') properties[idx].address = parsed.address;
         if (parsed.surface && parsed.surface !== 'null') properties[idx].surface = parsed.surface;
         renderGrid();
         await saveCatalog(properties);
-        addMsg('ai', `✅ ¡Listo! Propiedad actualizada:\n📍 ${properties[idx].address}\n💰 ${properties[idx].price}${properties[idx].surface ? '\n📐 '+properties[idx].surface : ''}`);
-        window._pendingPropId = null;
+        addMsg('ai', `✅ ${confirmation || 'Propiedad actualizada.'}\n\n📍 ${properties[idx].address}\n💰 ${properties[idx].price}${properties[idx].surface ? '\n📐 '+properties[idx].surface : ''}\n\nSi falta algún dato más, seguí escribiendo o decí "listo".`);
       }
     } else {
-      addMsg('ai', 'No entendí bien los datos. Intentá con formato: "USD 740.000, Montevideo al 1500 Recoleta, 208m2"');
+      // JSON parsing failed — try again with a direct question
+      addMsg('ai', `${reply}\n\nSi querés actualizar la propiedad, decime el precio, dirección o superficie.`);
     }
   } catch(e) {
     removeMsg(tid);
