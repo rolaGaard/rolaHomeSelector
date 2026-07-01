@@ -93,6 +93,16 @@ module.exports = async function handler(req, res) {
     const allText = [pageTitle, ogTitle, ogDesc, scriptText, bodyText].join(' | ');
     let price = findPrice(allText);
 
+    // Extract surface area
+    let surface = null;
+    const surfaceMatch = allText.match(/(\d{2,4})\s*m[²2](?:\s*(?:tot|cub|total|cubierta))?/i) ||
+                         allText.match(/superficie[^\d]*(\d{2,4})/i) ||
+                         allText.match(/sup\.?\s*tot[^\d]*(\d{2,4})/i);
+    if (surfaceMatch) {
+      const num = (surfaceMatch[1] || surfaceMatch[2] || '').trim();
+      if (num && parseInt(num) > 15 && parseInt(num) < 5000) surface = num + ' m²';
+    }
+
     // 5. Extract address from og:title / URL slug
     let address = null;
     const titleClean = (ogTitle || pageTitle).replace(/[-|–]\s*.{0,30}$/, '').trim();
@@ -119,7 +129,7 @@ module.exports = async function handler(req, res) {
                 { type: 'image', source: { type: 'base64', media_type: contentType, data: imgBase64 } },
                 { type: 'text', text: `Esta es una captura de pantalla de una página de inmobiliaria argentina (${domain}).
 Extraé los datos visibles y respondé SOLO con JSON válido, sin texto adicional:
-{"price":"precio como USD 430.000 o $ 85.000.000 o null","address":"dirección como Juncal al 2100 Recoleta o null","agency":"nombre de inmobiliaria o null","image_url":null}` }
+{"price":"precio como USD 430.000 o $ 85.000.000 o null","address":"dirección completa: si es intersección poné ej. Av Las Heras y Ayacucho, Recoleta; si es altura poné ej. Juncal al 2100, Recoleta; siempre incluí el barrio","surface":"superficie total como 163 m² o null","agency":"nombre de inmobiliaria o null"}` }
               ]
             }]
           });
@@ -129,13 +139,14 @@ Extraé los datos visibles y respondé SOLO con JSON válido, sin texto adiciona
           if (visionParsed) {
             price   = visionParsed.price   || price;
             address = visionParsed.address || address;
+            surface = visionParsed.surface || surface;
           }
         }
       } catch(e) { /* screenshot failed, use what we have */ }
     }
 
     return res.status(200).json({
-      extracted: { image_url: image || null, price: price || null, agency, address }
+      extracted: { image_url: image || null, price: price || null, agency, address, surface: surface || null }
     });
   }
 
