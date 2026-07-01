@@ -511,7 +511,17 @@ async function handleSend() {
   }
 
   const urlMatch = text.match(/https?:\/\/[^\s]+/);
-  if (urlMatch) {
+  if (urlMatch && window._pendingPropId) {
+    // URL pasted for an existing property without link → associate it
+    const idx = properties.findIndex(p => p.id === window._pendingPropId);
+    if (idx !== -1) {
+      properties[idx].url = urlMatch[0];
+      renderGrid();
+      await saveCatalog(properties);
+      addMsg('ai', '✅ Link asociado a la propiedad. Ahora al tocar la tarjeta te lleva directo.');
+      window._pendingPropId = null;
+    }
+  } else if (urlMatch) {
     await processLink(urlMatch[0]);
   } else if (window._pendingPropId && text.toLowerCase() !== 'listo') {
     await completePropManually(text);
