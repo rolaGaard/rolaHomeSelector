@@ -7,7 +7,7 @@ module.exports = async function handler(req, res) {
 
   const { messages, system, urlToFetch, mode } = req.body;
   // Sanitize API key in case it was saved multiple times in Vercel
-  const ANTHROPIC_KEY = (ANTHROPIC_KEY || '').trim().split(/\s+/)[0];
+  const ANTHROPIC_KEY = (process.env.ANTHROPIC_API_KEY || '').trim().split(/\s+/)[0];
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
   function getMeta(html, patterns) {
