@@ -366,23 +366,23 @@ async function processLink(url) {
   busy = true; setBusy(true);
   try {
     const data = await apiChat({
-      useWebSearch: true,
+      urlToFetch: url,
       system: `Sos un asistente especializado en propiedades inmobiliarias de Argentina.
-Cuando el usuario te da un link de una inmobiliaria, usás web_search para buscar info sobre esa propiedad.
-
-Respondé ÚNICAMENTE con un JSON válido, sin backticks ni texto adicional:
+El usuario te va a dar el contenido HTML de una página de una inmobiliaria.
+Analizá los datos y respondé ÚNICAMENTE con un JSON válido, sin backticks ni texto adicional:
 {
-  "image_url": "URL directa de la foto principal o og:image (string o null)",
+  "image_url": "URL directa de la foto principal — usá el valor de og:image si está disponible (string o null)",
   "price": "precio (ej: USD 280.000 o $ 85.000.000 — string o null)",
   "agency": "nombre de la inmobiliaria (string o null)",
   "address": "dirección corta (ej: Juncal al 2100, Recoleta — string o null)"
 }
-- image_url: preferí og:image o la primera foto de galería
-- price: preferí USD si existe; sin inventar precios
+- image_url: preferí og:image; si no hay, buscá cualquier URL de imagen de la propiedad en el HTML
+- price: preferí USD si existe; nunca inventes precios
 - address: solo calle + barrio, sin descripción larga
+- agency: extraela del título, dominio o contenido de la página
 - Si no podés obtener un dato, poné null
 - NUNCA pongas texto fuera del JSON`,
-      messages: [{ role: 'user', content: `Extraé los datos de esta propiedad: ${url}` }]
+      messages: []
     });
 
     removeMsg(tid);
@@ -438,7 +438,7 @@ async function chatGeneral(text) {
   busy = true; setBusy(true);
   try {
     const data = await apiChat({
-      useWebSearch: false,
+
       system: `Sos un asistente inmobiliario amigable, hablás en español rioplatense.
 El usuario busca propiedades en Argentina. Tiene ${properties.length} propiedades en su catálogo.
 Si quiere agregar una propiedad, pedile que pegue el link. Respondé de forma concisa.`,
