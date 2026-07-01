@@ -313,11 +313,21 @@ let properties = [];
 let busy = false;
 
 // ─── API CALLS ──────────────────────────────────────────────────────────────
-async function apiChat(payload) {
+async function apiExtract(url) {
+  const res = await fetch('/api/extract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  });
+  if (!res.ok) throw new Error(`Extract error ${res.status}`);
+  return res.json();
+}
+
+async function apiChat(messages, system) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify({ messages, system })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -362,49 +372,25 @@ async function handleSend() {
 }
 
 async function processLink(url) {
-  const tid = addTyping('Analizando propiedad…');
+  const tid = addTyping('Analizando propiedad con IA…');
   busy = true; setBusy(true);
   try {
-    const data = await apiChat({
-      urlToFetch: url,
-      system: `Sos un asistente especializado en propiedades inmobiliarias de Argentina.
-El usuario te va a dar el contenido HTML de una página de una inmobiliaria.
-Analizá los datos y respondé ÚNICAMENTE con un JSON válido, sin backticks ni texto adicional:
-{
-  "image_url": "URL directa de la foto principal — usá el valor de og:image si está disponible (string o null)",
-  "price": "precio (ej: USD 280.000 o $ 85.000.000 — string o null)",
-  "agency": "nombre de la inmobiliaria (string o null)",
-  "address": "dirección corta (ej: Juncal al 2100, Recoleta — string o null)"
-}
-- image_url: preferí og:image; si no hay, buscá cualquier URL de imagen de la propiedad en el HTML
-- price: preferí USD si existe; nunca inventes precios
-- address: solo calle + barrio, sin descripción larga
-- agency: extraela del título, dominio o contenido de la página
-- Si no podés obtener un dato, poné null
-- NUNCA pongas texto fuera del JSON`,
-      messages: []
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'extract', urlToFetch: url })
     });
-
+    const data = await res.json();
     removeMsg(tid);
 
-    let rawText = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('');
-    let propData = null;
-    try {
-      propData = JSON.parse(rawText.replace(/```json?/g,'').replace(/```/g,'').trim());
-    } catch {
-      const m = rawText.match(/\{[\s\S]*?\}/);
-      if (m) try { propData = JSON.parse(m[0]); } catch {}
-    }
-
-    if (!propData) throw new Error('No pude extraer los datos. Verificá que el link sea público y accesible.');
-
+    const p = data.extracted || {};
     const prop = {
-      id: Date.now().toString(),
+      id:       Date.now().toString(),
       url,
-      image:    propData.image_url  || null,
-      price:    propData.price      || 'Precio a consultar',
-      agency:   propData.agency     || 'Inmobiliaria',
-      address:  propData.address    || 'Dirección no disponible',
+      image:    p.image_url || null,
+      price:    p.price     || 'Precio a consultar',
+      agency:   p.agency    || 'Inmobiliaria',
+      address:  p.address   || 'Ver propiedad →',
       added_at: new Date().toLocaleDateString('es-AR')
     };
 
@@ -414,7 +400,7 @@ Analizá los datos y respondé ÚNICAMENTE con un JSON válido, sin backticks ni
     addMsg('ai',
       `✅ ¡Propiedad agregada!\n\n` +
       `📍 ${prop.address}\n💰 ${prop.price}\n🏢 ${prop.agency}` +
-      (!propData.image_url ? '\n\n⚠️ No encontré foto, pero el link está guardado.' : '')
+      (!p.image_url ? '\n\n⚠️ Sin foto encontrada.' : '')
     );
 
     try {
@@ -437,13 +423,10 @@ async function chatGeneral(text) {
   const tid = addTyping('Pensando…');
   busy = true; setBusy(true);
   try {
-    const data = await apiChat({
-
-      system: `Sos un asistente inmobiliario amigable, hablás en español rioplatense.
-El usuario busca propiedades en Argentina. Tiene ${properties.length} propiedades en su catálogo.
-Si quiere agregar una propiedad, pedile que pegue el link. Respondé de forma concisa.`,
-      messages: [{ role: 'user', content: text }]
-    });
+    const data = await apiChat(
+      [{ role: 'user', content: text }],
+      `Sos un asistente inmobiliario amigable, hablás en español rioplatense. El usuario busca propiedades en Argentina. Tiene ${properties.length} propiedades en su catálogo. Si quiere agregar una propiedad, pedile que pegue el link. Respondé de forma concisa.`
+    );
     removeMsg(tid);
     const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('');
     addMsg('ai', reply || '(sin respuesta)');
@@ -454,6 +437,7 @@ Si quiere agregar una propiedad, pedile que pegue el link. Respondé de forma co
     busy = false; setBusy(false);
   }
 }
+
 
 // ─── RENDER ─────────────────────────────────────────────────────────────────
 function renderGrid() {
