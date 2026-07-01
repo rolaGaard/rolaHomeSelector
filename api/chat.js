@@ -84,7 +84,9 @@ module.exports = async function handler(req, res) {
         });
         if (jr.ok) {
           const jt = await jr.text();
-          if (jt.length > 200) jinaText = jt;
+          // Ignore Jina error responses
+          const isError = /error 403|error 404|403 forbidden|404 not found|just a moment|access denied|blocked|captcha/i.test(jt.substring(0,300));
+          if (jt.length > 200 && !isError) jinaText = jt;
         }
       } catch(e) {}
     }
