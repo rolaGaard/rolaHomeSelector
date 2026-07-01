@@ -350,17 +350,37 @@ async function loadCatalog() {
   const res = await fetch('/api/catalog');
   if (!res.ok) throw new Error(`Catalog load error ${res.status}`);
   const data = await res.json();
-  return data.properties || [];
+  return restoreLocalImages(data.properties || []);
 }
 
 async function saveCatalog(props) {
+  // Strip base64 images before saving to GitHub (too large)
+  // Store them in localStorage keyed by property id
+  const propsForGitHub = props.map(p => {
+    if (p.image && p.image.startsWith('data:')) {
+      try { localStorage.setItem('img_' + p.id, p.image); } catch(e) {}
+      return { ...p, image: '__local__' + p.id };
+    }
+    return p;
+  });
+
   const res = await fetch('/api/catalog', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ properties: props })
+    body: JSON.stringify({ properties: propsForGitHub })
   });
   if (!res.ok) throw new Error(`Catalog save error ${res.status}`);
   return res.json();
+}
+
+function restoreLocalImages(props) {
+  return props.map(p => {
+    if (p.image && p.image.startsWith('__local__')) {
+      const localImg = localStorage.getItem('img_' + p.id);
+      return { ...p, image: localImg || null };
+    }
+    return p;
+  });
 }
 
 // ─── CHAT ───────────────────────────────────────────────────────────────────
